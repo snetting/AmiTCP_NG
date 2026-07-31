@@ -34,7 +34,12 @@
   "NOTRACKING/S," \
   "NOARP/S," \
   "ARPHDR/N/K," \
-  "P2P=POINT2POINT/S,NOSIMPLEX/S,LOOPBACK/S"
+  "P2P=POINT2POINT/S,NOSIMPLEX/S,LOOPBACK/S," \
+  "RXDMA/K"
+
+#define SS_RXDMA_DEFAULT 0
+#define SS_RXDMA_OFF     1
+#define SS_RXDMA_AUTO    2
 
 struct ssc_args {
   UBYTE *a_name;
@@ -51,6 +56,7 @@ struct ssc_args {
   LONG   a_point2point;
   LONG   a_nosimplex;
   LONG   a_loopback;
+  UBYTE *a_rxdma;
 };
 
 struct ssconfig {
@@ -59,6 +65,7 @@ struct ssconfig {
   char            name[IFNAMSIZ];
   struct RDArgs   rdargs[1];
   struct ssc_args args[1];
+  LONG            rxdma;
 };
 
 #define SSCF_RDARGS 1		/* set iff rdargs should be freed */

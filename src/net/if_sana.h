@@ -85,8 +85,15 @@ struct IOIPReq {
   void             (*ioip_dispatch)(struct sana_softc *, struct IOIPReq *); 
   struct mbuf       *ioip_reserved;   /* reserved for packet */
   struct mbuf       *ioip_packet;     /* packet */
+  struct mbuf       *ioip_dma_rx;     /* mbuf offered to S2_DMACopyToBuff32 */
+  ULONG              ioip_dma_rx_capacity;
+  UBYTE              ioip_rx_state;
   struct IOIPReq    *ioip_next;	      /* allocation queue */
 };
+
+#define IOIP_RX_POSTED       0
+#define IOIP_RX_DMA_OFFERED  1
+#define IOIP_RX_COPIED       2
 
 /*
  * A socket address for a generic SANA-II host
@@ -116,6 +123,8 @@ struct sana_softc {
   VOID           *ss_bufmgnt;	      /* magic cookie for buffer management */
   ULONG           ss_copyin;	      /* SANA2 byte CopyToBuff (RX) call count   */
   ULONG           ss_copyout;	      /* SANA2 byte CopyFromBuff (TX) call count  */
+  ULONG           ss_dmain;           /* SANA2 DMA CopyToBuff (RX) completion count */
+  UBYTE           ss_rxdma_mode;      /* SS_RXDMA_* effective mode */
   UWORD		  ss_reqno;	      /* # of requests to allocate */
   UWORD           ss_cflags;	      /* configuration flags */
   UBYTE           ss_offcleanup;      /* set when the driver went offline: sana_poll()

@@ -241,6 +241,116 @@ ioip_alloc_mbuf(struct IOIPReq *s2rp, ULONG MTU)
 }
 #endif
 
+/* Return one contiguous, writable mbuf area suitable for the SANA-II
+ * S2_DMACopyToBuff32 callback.  The receive pool deliberately keeps the
+ * packet header separate from its cluster: small packets can therefore use
+ * the header mbuf without consuming a cluster. */
+static APTR
+ioip_dma_rx_buffer(struct IOIPReq *s2rp, ULONG length)
+{
+  struct mbuf *m = s2rp->ioip_reserved;
+  APTR data;
+  ULONG capacity;
+
+  if (m == NULL || !(m->m_flags & M_PKTHDR) || length == 0)
+    return NULL;
+
+  if (length <= (ULONG)m->m_len) {
+    data = mtod(m, APTR);
+    capacity = (ULONG)m->m_len;
+  } else {
+    m = m->m_next;
+    if (m == NULL || !(m->m_flags & M_EXT))
+      return NULL;
+    data = mtod(m, APTR);
+    capacity = (ULONG)m->m_len;
+  }
+
+  /* SANA-II requires a contiguous, 32-bit aligned buffer whose capacity is
+   * a multiple of four bytes.  Keep these checks runtime-visible: mbuf pool
+   * sizing is configurable and should not silently invalidate DMA. */
+  if (capacity < length || (capacity & 3) != 0 ||
+      ((ULONG)data & 3) != 0)
+    return NULL;
+
+  s2rp->ioip_dma_rx = m;
+  s2rp->ioip_dma_rx_capacity = capacity;
+  s2rp->ioip_rx_state = IOIP_RX_DMA_OFFERED;
+  return data;
+}
+
+/* S2_DMACopyToBuff32: the driver may DMA the received packet directly into
+ * one of our reserved mbufs.  This runs at device interrupt time. */
+static SAVEDS APTR RAF1(m_dma_copy_to_mbuf,
+			 struct IOIPReq*, req, a0)
+#if 0
+{
+#endif
+  if (req == NULL)
+    return NULL;
+
+  if (req->ioip_rx_state == IOIP_RX_DMA_OFFERED &&
+      req->ioip_dma_rx != NULL)
+    return mtod(req->ioip_dma_rx, APTR);
+
+  if (req->ioip_rx_state != IOIP_RX_POSTED)
+    return NULL;
+
+  return ioip_dma_rx_buffer(req, req->ioip_s2.ios2_DataLength);
+}
+
+/* Finalize a successful direct receive after the device has filled the
+ * offered mbuf.  The byte-copy callback performs this same ownership move
+ * inside its interrupt-time callback, but DMA cannot do so until completion. */
+BOOL
+ioip_finalize_dma_rx(struct IOIPReq *s2rp)
+{
+  struct mbuf *reserved, *m, *tail;
+  ULONG length;
+
+  if (s2rp == NULL || s2rp->ioip_rx_state != IOIP_RX_DMA_OFFERED ||
+      (m = s2rp->ioip_dma_rx) == NULL)
+    return FALSE;
+
+  length = s2rp->ioip_s2.ios2_DataLength;
+  if (length > s2rp->ioip_dma_rx_capacity)
+    goto bad;
+
+  reserved = s2rp->ioip_reserved;
+  if (reserved == NULL || !(reserved->m_flags & M_PKTHDR))
+    goto bad;
+
+  if (m == reserved) {
+    tail = m->m_next;
+    m->m_next = NULL;
+    m->m_len = length;
+    m->m_pkthdr.len = length;
+    s2rp->ioip_reserved = tail;
+  } else if (m == reserved->m_next) {
+    tail = m->m_next;
+    reserved->m_next = tail;
+    m->m_next = NULL;
+    m->m_flags |= M_PKTHDR;
+    m->m_len = length;
+    m->m_pkthdr.len = length;
+  } else {
+    goto bad;
+  }
+
+  s2rp->ioip_packet = m;
+  s2rp->ioip_dma_rx = NULL;
+  s2rp->ioip_dma_rx_capacity = 0;
+  s2rp->ioip_rx_state = IOIP_RX_POSTED;
+  s2rp->ioip_if->ss_dmain++;
+  return TRUE;
+
+bad:
+  s2rp->ioip_dma_rx = NULL;
+  s2rp->ioip_dma_rx_capacity = 0;
+  s2rp->ioip_rx_state = IOIP_RX_POSTED;
+  return FALSE;
+}
+
 /*
  * Copy data from an mbuf chain starting from the beginning,
  * continuing for "n" bytes, into the indicated continuous buffer.
@@ -303,6 +413,11 @@ static SAVEDS BOOL RAF3(m_copy_to_mbuf,
   register struct mbuf *f, *m = to->ioip_reserved;
   unsigned totlen = n;
 
+  /* A DMA-capable driver may probe first and then fall back to this callback.
+   * The copy path owns packet finalization in that case. */
+  to->ioip_dma_rx = NULL;
+  to->ioip_dma_rx_capacity = 0;
+  to->ioip_rx_state = IOIP_RX_COPIED;
   to->ioip_if->ss_copyin++;		/* SANA2CopyStats: byte CopyToBuff (RX) */
 
 #if DIAGNOSTIC
@@ -357,9 +472,15 @@ static SAVEDS BOOL RAF3(m_copy_to_mbuf,
   return TRUE;
 }
 
-struct TagItem buffermanagement[3] = {
+struct TagItem buffermanagement_legacy[3] = {
     { S2_CopyToBuff,   (ULONG)m_copy_to_mbuf },
     { S2_CopyFromBuff, (ULONG)m_copy_from_mbuf },
     { TAG_END, }
 };
 
+struct TagItem buffermanagement[4] = {
+    { S2_CopyToBuff,       (ULONG)m_copy_to_mbuf },
+    { S2_CopyFromBuff,     (ULONG)m_copy_from_mbuf },
+    { S2_DMACopyToBuff32,  (ULONG)m_dma_copy_to_mbuf },
+    { TAG_END, }
+};

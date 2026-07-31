@@ -490,7 +490,11 @@ iface_make(struct ssconfig *ifc)
   if ((req = CreateIOSana2Req(NULL)) == NULL) 
     log(LOG_ERR, "iface_find(): CreateIOSana2Req failed\n");
   else {
-    req->ios2_BufferManagement = buffermanagement;
+    /* The optional DMA callback is selected before OpenDevice().  Keeping a
+     * separate legacy list makes RXDMA=OFF an exact A/B control, rather than
+     * merely an enabled callback which always declines the buffer. */
+    req->ios2_BufferManagement =
+	(ifc->rxdma == SS_RXDMA_OFF) ? buffermanagement_legacy : buffermanagement;
 
     /* PORT (AmiTCP_NG): resolve the SANA-II driver robustly. A config just names the
      * driver (e.g. `device=wifipi.device`). Try it exactly as given FIRST -- a bare
@@ -614,6 +618,8 @@ iface_make(struct ssconfig *ifc)
 
 	    /* Initialize */ 
 	    ssconfig(ssc, ifc);
+	    ssc->ss_rxdma_mode =
+	      (ifc->rxdma == SS_RXDMA_OFF) ? SS_RXDMA_OFF : SS_RXDMA_AUTO;
 	    
 	    NewList((struct List*)&ssc->ss_freereq);
 
@@ -651,7 +657,7 @@ iface_make(struct ssconfig *ifc)
  */
 struct ifnet *
 sana_add_interface(char *ifname, char *devname, long devunit,
-		   long ipreq, long wreq)
+		   long ipreq, long wreq, long rxdma)
 {
   struct ssconfig ssc;
   LONG unit_val = devunit;
@@ -669,6 +675,7 @@ sana_add_interface(char *ifname, char *devname, long devunit,
   S_LOG("split_unit", ssc.unit);
 
   ssc.flags = 0;			/* no ReadArgs RDArgs to free */
+  ssc.rxdma = rxdma;
   ssc.args->a_name = (UBYTE *)ssc.name;
   ssc.args->a_dev  = (UBYTE *)devname;
   ssc.args->a_unit = &unit_val;
@@ -982,6 +989,9 @@ sana_run(struct sana_softc *ssc, int requests, struct ifaddr *ifa)
       req->ioip_s2.ios2_Req.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
       req->ioip_s2.ios2_Data = req;
       req->ioip_if = ssc;
+      req->ioip_dma_rx = NULL;
+      req->ioip_dma_rx_capacity = 0;
+      req->ioip_rx_state = IOIP_RX_POSTED;
       req->ioip_next = next;
       AddTail((struct List*)&ssc->ss_freereq, (struct Node*)req);
       next = req;
@@ -1108,6 +1118,10 @@ sana_send_read(struct sana_softc *ssc, WORD count, ULONG type, ULONG mtu,
     req->ioip_s2.ios2_Req.io_Flags = flags;
     if (!ioip_alloc_mbuf(req, mtu))
       goto no_resources;
+    req->ioip_s2.ios2_DataLength = mtu;
+    req->ioip_dma_rx = NULL;
+    req->ioip_dma_rx_capacity = 0;
+    req->ioip_rx_state = IOIP_RX_POSTED;
     BeginIO((struct IORequest*)req);
   }
   return i;
@@ -1253,16 +1267,41 @@ static struct mbuf *
 sana_read(struct sana_softc *ssc, struct IOIPReq *req,
 	  UWORD  flags, UWORD *sent, const char *banner, size_t mtu)
 {
-  register struct mbuf *m = req->ioip_packet;
+  register struct mbuf *m;
   register spl_t s = splimp();
+  BOOL dma_bad = FALSE;
+
+  if (req->ioip_rx_state == IOIP_RX_DMA_OFFERED &&
+      !ioip_finalize_dma_rx(req)) {
+    /* Do not expose a partially filled mbuf.  Treat the completion as a
+     * failed receive while retaining the normal request recycling path. */
+    dma_bad = TRUE;
+    req->ioip_Error = S2ERR_SOFTWARE;
+  }
+
+  m = req->ioip_packet;
 
   req->ioip_packet = NULL;
 
+  if (req->ioip_Error != 0 && req->ioip_rx_state == IOIP_RX_DMA_OFFERED) {
+    req->ioip_dma_rx = NULL;
+    req->ioip_dma_rx_capacity = 0;
+    req->ioip_rx_state = IOIP_RX_POSTED;
+  }
+
+  if (req->ioip_Error == 0 && m == NULL) {
+    /* A successful read must have gone through either the DMA completion
+     * path or the mandatory byte-copy callback. */
+    req->ioip_Error = S2ERR_SOFTWARE;
+  }
+
   switch (req->ioip_Error) {
   case 0:
-    if (req->ioip_s2.ios2_Req.io_Flags & SANA2IOF_BCAST) 
+    if (!dma_bad && m != NULL &&
+	(req->ioip_s2.ios2_Req.io_Flags & SANA2IOF_BCAST))
       m->m_flags |= M_BCAST;
-    if (req->ioip_s2.ios2_Req.io_Flags & SANA2IOF_MCAST)
+    if (!dma_bad && m != NULL &&
+	(req->ioip_s2.ios2_Req.io_Flags & SANA2IOF_MCAST))
       m->m_flags |= M_MCAST;
     break;
   case S2ERR_OUTOFSERVICE:
@@ -1310,6 +1349,10 @@ sana_read(struct sana_softc *ssc, struct IOIPReq *req,
     /* Return request to the Sana-II driver */
     if (ioip_alloc_mbuf(req, mtu)) {
       req->ioip_s2.ios2_Req.io_Flags = flags;
+      req->ioip_s2.ios2_DataLength = mtu;
+      req->ioip_dma_rx = NULL;
+      req->ioip_dma_rx_capacity = 0;
+      req->ioip_rx_state = IOIP_RX_POSTED;
       BeginIO((struct IORequest*)req); 
       splx(s);
       return m;

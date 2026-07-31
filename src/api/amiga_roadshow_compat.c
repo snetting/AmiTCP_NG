@@ -422,6 +422,10 @@ ng_flush_dynamic_nameservers(void)
 #define NGCT_WriteRequests	(TAG_USER + 0x004E4702)	/* LONG send requests    */
 #define NGCT_TcpSendspace	(TAG_USER + 0x004E4703)	/* LONG TCP send buffer  */
 #define NGCT_TcpRecvspace	(TAG_USER + 0x004E4704)	/* LONG TCP recv buffer  */
+#define NGCT_SANA2RxDMA		(TAG_USER + 0x004E4705)	/* SS_RXDMA_* mode       */
+#define NG_RXDMA_DEFAULT	0
+#define NG_RXDMA_OFF		1
+#define NG_RXDMA_AUTO		2
 
 /* IFC_State values (Roadshow SM_* interface-state machine). */
 #define NG_SM_Offline	0
@@ -645,7 +649,7 @@ LONG SAVEDS RAF3(_ConfigureInterfaceTagList,
  * could not be opened).
  */
 extern struct ifnet *sana_add_interface(char *ifname, char *devname, long devunit,
-					long ipreq, long wreq);
+					long ipreq, long wreq, long rxdma);
 
 /*
  * ng_speed_window -- the TCP window we WANT for a link of the given speed, in bytes.
@@ -696,7 +700,7 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
 {
 #endif
   int error;
-  long ipreq, wreq, sndsp, rcvsp;	/* sndsp/rcvsp needed again for the auto-tune below */
+  long ipreq, wreq, sndsp, rcvsp, rxdma;	/* sndsp/rcvsp needed again for the auto-tune below */
 
   CHECK_TASK();
 
@@ -719,11 +723,13 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
    */
   { struct TagItem *ti, *tstate = tags;
     ipreq = wreq = sndsp = rcvsp = 0;
+    rxdma = NG_RXDMA_DEFAULT;
     while ((ti = ng_nexttag(&tstate)) != NULL) {
       if (ti->ti_Tag == NGCT_IPRequests)         ipreq = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_WriteRequests) wreq  = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_TcpSendspace)  sndsp = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_TcpRecvspace)  rcvsp = (long)ti->ti_Data;
+      else if (ti->ti_Tag == NGCT_SANA2RxDMA)    rxdma = (long)ti->ti_Data;
     }
     /*
      * Honour an explicit tcp.sendspace= / tcp.recvspace= from the interface config by
@@ -763,7 +769,7 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
   }
   {
     struct ifnet *newif = sana_add_interface((char *)interface_name, (char *)device_name,
-					     (long)unit, ipreq, wreq);
+					     (long)unit, ipreq, wreq, rxdma);
     if (newif == NULL) {
       ReleaseSyscallSemaphore(libPtr);
       writeErrnoValue(libPtr, ENXIO);		/* could not open the device */
@@ -1119,10 +1125,10 @@ VOID SAVEDS RAF2(_ReleaseInterfaceList,
 #define IFQ_GetBytesIn			(IFQ_BASE + 28)
 #define IFQ_GetBytesOut			(IFQ_BASE + 29)
 #define IFQ_GetSANA2CopyStats		(IFQ_BASE + 31)
+#define IFQ_SANA2RxDMAMode		(IFQ_BASE + 43)
 
 /* SANA-II buffer-management copy-function call counters (mirrors the SDK's
- * struct SANA2CopyStats). We provide only the byte-wide copy hooks, so the DMA
- * and word-wide counts are always 0. */
+ * struct SANA2CopyStats). */
 struct SANA2CopyStats {
 	ULONG	s2cs_DMAIn;
 	ULONG	s2cs_DMAOut;
@@ -1277,18 +1283,18 @@ LONG SAVEDS RAF3(_QueryInterfaceTagList,
       ((ULONG *)d)[1] = (ULONG)ifp->if_obytes;	/* sbq_Low  */
       break;
     case IFQ_GetSANA2CopyStats:
-      /* Buffer-management copy-function call counts (Roadshow ShowNetStatus's
-       * "Transfer statistics" line). We register only the byte-wide copy hooks
-       * (m_copy_to_mbuf / m_copy_from_mbuf), so ByteIn/ByteOut carry the RX/TX
-       * call counts and the DMA/word fields are honestly 0. */
+      /* Buffer-management copy-function call counts. */
       {
 	struct SANA2CopyStats *cs = (struct SANA2CopyStats *)d;
-	cs->s2cs_DMAIn   = 0;
+	cs->s2cs_DMAIn   = ssc ? ssc->ss_dmain   : 0;
 	cs->s2cs_DMAOut  = 0;
 	cs->s2cs_ByteIn  = ssc ? ssc->ss_copyin  : 0;
 	cs->s2cs_ByteOut = ssc ? ssc->ss_copyout : 0;
 	cs->s2cs_WordOut = 0;
       }
+      break;
+    case IFQ_SANA2RxDMAMode:
+      *(ULONG *)d = ssc ? (ULONG)ssc->ss_rxdma_mode : 0;
       break;
     /* Counters this stack does not track. Answer 0 (a plausible figure) rather than
      * leaving the caller's buffer untouched -- an unwritten buffer reads back as

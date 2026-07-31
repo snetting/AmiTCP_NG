@@ -56,6 +56,16 @@ extern struct Library *SocketBase;
 #define IFQ_Address		(IFQ_BASE + 14)
 #define IFQ_NetMask		(IFQ_BASE + 17)
 #define IFQ_State		(IFQ_BASE + 19)
+#define IFQ_GetSANA2CopyStats	(IFQ_BASE + 31)
+#define IFQ_SANA2RxDMAMode	(IFQ_BASE + 43)
+
+struct SANA2CopyStats {
+  ULONG s2cs_DMAIn;
+  ULONG s2cs_DMAOut;
+  ULONG s2cs_ByteIn;
+  ULONG s2cs_ByteOut;
+  ULONG s2cs_WordOut;
+};
 
 /* ---- vector wrappers ------------------------------------------------------- */
 static long __attribute__((unused)) ng_errno(void) {						/* Errno -162 */

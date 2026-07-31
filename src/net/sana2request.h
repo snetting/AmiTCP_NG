@@ -49,7 +49,12 @@
  * 
  */
 
+struct IOIPReq;
+
 extern struct TagItem buffermanagement[];
+extern struct TagItem buffermanagement_legacy[];
+
+BOOL ioip_finalize_dma_rx(struct IOIPReq *s2rp);
 
 #ifndef SYS_PARAM_H
 #include <sys/param.h>
@@ -98,4 +103,3 @@ DeleteIOSana2Req(register struct IOSana2Req *open)
   if (port)
     DeleteMsgPort(port);
 }
-

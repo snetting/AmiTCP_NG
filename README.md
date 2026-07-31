@@ -189,10 +189,20 @@ Settings AmiTCP_NG acts on:
 | `nameserver=`        | A DNS server. Repeat the line for more than one. |
 | `domain=`            | Default domain name. |
 | `requiresinitdelay=yes` | Pause briefly after opening the device (some hardware needs a warm-up before it will configure). |
+| `sana2.rx_dma=auto` | Advertise the optional SANA-II RX DMA callback; the driver may use it or fall back to copying. |
+| `sana2.rx_dma=off` | Disable the optional callback for an exact legacy A/B comparison. |
 
 Roadshow keys that AmiTCP_NG does not act on (`iprequests`, `writerequests`,
 `filter`, `configure=auto/fastauto`, `debug`) are accepted and ignored, so a
 Roadshow interface file drops in without edits.
+
+For the RX DMA performance comparison, use the same library and workload with
+`sana2.rx_dma=off` and `sana2.rx_dma=auto`. The repository's emulated benchmark
+wrapper runs paired tests and reports throughput plus DMA/fallback counts:
+
+```
+RUNS=5 CPU=68000 ./docker/run-sana2-ab.sh
+```
 
 ### 2. Bring it up
 

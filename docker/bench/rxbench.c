@@ -10,8 +10,22 @@
 #include <dos/dos.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <utility/tagitem.h>
 
 struct Library *SocketBase;
+
+#define NG_TU                       0x80000000UL
+#define IFQ_BASE                    (NG_TU + 1900)
+#define IFQ_GetSANA2CopyStats       (IFQ_BASE + 31)
+#define IFQ_SANA2RxDMAMode          (IFQ_BASE + 43)
+
+struct SANA2CopyStats {
+  ULONG s2cs_DMAIn;
+  ULONG s2cs_DMAOut;
+  ULONG s2cs_ByteIn;
+  ULONG s2cs_ByteOut;
+  ULONG s2cs_WordOut;
+};
 
 struct sockaddr_in {
   UBYTE  sin_len, sin_family;
@@ -33,6 +47,10 @@ static void v_close(long s){register long _d0 __asm("d0")=s;register struct Libr
   __asm__ __volatile__("jsr a6@(-120)":"+r"(_d0):"r"(_d0),"r"(_a6):"d1","a0","a1","memory");}
 static long v_errno(void){register long _d0 __asm("d0");register struct Library*_a6 __asm("a6")=SocketBase;
   __asm__ __volatile__("jsr a6@(-162)":"=r"(_d0):"r"(_a6):"d1","a0","a1","memory");return _d0;}
+static long v_query(void *name, void *tags){register long _d0 __asm("d0");
+  register void *_a0 __asm("a0")=name; register void *_a1 __asm("a1")=tags;
+  register struct Library *_a6 __asm("a6")=SocketBase;
+  __asm__ __volatile__("jsr a6@(-468)":"=r"(_d0),"+r"(_a0),"+r"(_a1):"r"(_a6):"d1","memory");return _d0;}
 
 static void logs(BPTR f,const char*s){long n=0;const char*p=s;while(*p++)n++;if(f)Write(f,(APTR)s,n);}
 static void lognum(BPTR f,long v){char b[12];int i=11;unsigned long u=v<0?-(unsigned long)v:v;b[i--]=0;
@@ -42,11 +60,32 @@ static void lognum(BPTR f,long v){char b[12];int i=11;unsigned long u=v<0?-(unsi
 static unsigned long now_ticks(void){ struct DateStamp ds; DateStamp(&ds);
   return (unsigned long)ds.ds_Minute*3000UL + (unsigned long)ds.ds_Tick; }
 
+static void query_copy_stats(ULONG *dma, ULONG *byte, ULONG *mode)
+{
+  struct SANA2CopyStats cs;
+  struct TagItem tags[3];
+  LONG mode_value = 0;
+
+  cs.s2cs_DMAIn = cs.s2cs_DMAOut = cs.s2cs_ByteIn = 0;
+  cs.s2cs_ByteOut = cs.s2cs_WordOut = 0;
+  tags[0].ti_Tag = IFQ_GetSANA2CopyStats; tags[0].ti_Data = (ULONG)&cs;
+  tags[1].ti_Tag = IFQ_SANA2RxDMAMode;    tags[1].ti_Data = (ULONG)&mode_value;
+  tags[2].ti_Tag = TAG_END;               tags[2].ti_Data = 0;
+  if (v_query((void *)"bench", tags) != 0) {
+    cs.s2cs_DMAIn = cs.s2cs_ByteIn = 0;
+    mode_value = 0;
+  }
+  *dma = cs.s2cs_DMAIn;
+  *byte = cs.s2cs_ByteIn;
+  *mode = (ULONG)mode_value;
+}
+
 int main(void){
   static UBYTE buf[32768];
   struct sockaddr_in sa;
   long s, n, secs = 15;
   unsigned long total = 0, t0, tnow, elapsed, kbps;
+  ULONG dma0, byte0, dma1, byte1, mode1;
   BPTR f = Open((STRPTR)"SYS:rxbench.log", MODE_NEWFILE);
 
   SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
@@ -63,6 +102,8 @@ int main(void){
   if (v_connect(s,&sa,sizeof(sa)) < 0){ logs(f,"connect() failed errno="); lognum(f,v_errno()); logs(f,"\n"); v_close(s); goto out; }
   logs(f,"connected -- receiving for "); lognum(f,secs); logs(f," s ...\n");
 
+  query_copy_stats(&dma0, &byte0, &mode1);
+
   t0 = now_ticks();
   for (;;) {
     tnow = now_ticks();
@@ -76,10 +117,13 @@ int main(void){
   if (elapsed == 0) elapsed = 1;
   /* KB/s = (total/1024) / (elapsed/50) = total*50 / (1024*elapsed); do the /1024 first to avoid overflow */
   kbps = (total / 1024UL) * 50UL / elapsed;
+  query_copy_stats(&dma1, &byte1, &mode1);
 
   logs(f,"RESULT: received "); lognum(f,(long)total); logs(f," bytes in ");
   lognum(f,(long)elapsed); logs(f," ticks (1/50s) = ");
-  lognum(f,(long)kbps); logs(f," KB/s\n");
+  lognum(f,(long)kbps); logs(f," KB/s mode="); lognum(f,(long)mode1);
+  logs(f," dma_in="); lognum(f,(long)(dma1 - dma0));
+  logs(f," byte_in="); lognum(f,(long)(byte1 - byte0)); logs(f,"\n");
   v_close(s);
 
 out:

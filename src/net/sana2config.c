@@ -102,6 +102,7 @@ ssconfig_parse(struct CSource argfile[])
    * The original read config->rdargs BEFORE this NULL check -> NULL deref crash.
    */
   if (config != NULL) {
+    config->rxdma = SS_RXDMA_DEFAULT;
     rdargs = config->rdargs;
     rdargs->RDA_Source = *argfile;
     rdargs->RDA_DAList = NULL;
@@ -111,6 +112,18 @@ ssconfig_parse(struct CSource argfile[])
     rdargs->RDA_Flags = RDAF_NOPROMPT;
     
     if (ReadArgs((CONST_STRPTR)template, (LONG *)config->args, rdargs)) {
+      /* RXDMA=OFF disables the optional SANA-II DMA callback for an exact
+       * legacy comparison. Any other explicit value selects the optional
+       * callback path; the driver may still fall back to CopyToBuff. */
+      if (config->args->a_rxdma != NULL) {
+        UBYTE *v = config->args->a_rxdma;
+        if ((v[0] == 'o' || v[0] == 'O') &&
+            (v[1] == 'f' || v[1] == 'F') &&
+            (v[2] == 'f' || v[2] == 'F') && v[3] == '\0')
+          config->rxdma = SS_RXDMA_OFF;
+        else
+          config->rxdma = SS_RXDMA_AUTO;
+      }
       config->flags |= SSCF_RDARGS;
       return config;
     } else {
@@ -461,4 +474,3 @@ ssconfig(struct sana_softc *ifp, struct ssconfig *ifc)
   ifp->ss_execname = (UBYTE *)strcpy((char *)(ifp + 1), (char *)ifc->args->a_dev);
   ifp->ss_execunit = *ifc->args->a_unit;
 }
-

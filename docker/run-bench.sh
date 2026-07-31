@@ -8,12 +8,15 @@
 #   ./docker/run-bench.sh                 # stock A600 (68000)
 #   CPU=68040 ./docker/run-bench.sh       # accelerated (68040, unthrottled, JIT)
 #   CPU=68060 ./docker/run-bench.sh
+#   RXDMA=off ./docker/run-bench.sh   # legacy SANA-II buffer callbacks
+#   RXDMA=auto ./docker/run-bench.sh  # advertise optional RX DMA callback
 #   NOSTAGE=1 ./docker/run-bench.sh       # use whatever lib is already staged
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 G="$ROOT/emu/hdd/System/Workbench3.2"
 CPU="${CPU:-68000}"
 TIMEOUT="${TIMEOUT:-170}"
+RXDMA="${RXDMA:-auto}"
 
 # CPU flags: 68000 = the plain model; anything else = unthrottled + JIT.
 CPUARGS=()
@@ -39,6 +42,7 @@ cat > "$G/Devs/NetInterfaces/bench" <<'IFACE'
 device=a2065.device
 configure=dhcp
 IFACE
+printf 'sana2.rx_dma=%s\n' "$RXDMA" >> "$G/Devs/NetInterfaces/bench"
 cat > "$G/S/Startup-sequence" <<'BOOT'
 C:SetPatch QUIET
 MakeDir RAM:T >NIL:
