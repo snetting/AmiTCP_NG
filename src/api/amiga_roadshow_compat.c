@@ -423,9 +423,13 @@ ng_flush_dynamic_nameservers(void)
 #define NGCT_TcpSendspace	(TAG_USER + 0x004E4703)	/* LONG TCP send buffer  */
 #define NGCT_TcpRecvspace	(TAG_USER + 0x004E4704)	/* LONG TCP recv buffer  */
 #define NGCT_SANA2RxDMA		(TAG_USER + 0x004E4705)	/* SS_RXDMA_* mode       */
+#define NGCT_SANA2RxCopy		(TAG_USER + 0x004E4706)	/* SS_RXCOPY_* mode      */
 #define NG_RXDMA_DEFAULT	0
 #define NG_RXDMA_OFF		1
 #define NG_RXDMA_AUTO		2
+#define NG_RXCOPY_DEFAULT	0
+#define NG_RXCOPY_SPLIT	1
+#define NG_RXCOPY_CONTIGUOUS	2
 
 /* IFC_State values (Roadshow SM_* interface-state machine). */
 #define NG_SM_Offline	0
@@ -649,7 +653,7 @@ LONG SAVEDS RAF3(_ConfigureInterfaceTagList,
  * could not be opened).
  */
 extern struct ifnet *sana_add_interface(char *ifname, char *devname, long devunit,
-					long ipreq, long wreq, long rxdma);
+					long ipreq, long wreq, long rxdma, long rxcopy);
 
 /*
  * ng_speed_window -- the TCP window we WANT for a link of the given speed, in bytes.
@@ -700,7 +704,7 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
 {
 #endif
   int error;
-  long ipreq, wreq, sndsp, rcvsp, rxdma;	/* sndsp/rcvsp needed again for the auto-tune below */
+  long ipreq, wreq, sndsp, rcvsp, rxdma, rxcopy;	/* sndsp/rcvsp needed again for the auto-tune below */
 
   CHECK_TASK();
 
@@ -724,12 +728,14 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
   { struct TagItem *ti, *tstate = tags;
     ipreq = wreq = sndsp = rcvsp = 0;
     rxdma = NG_RXDMA_DEFAULT;
+    rxcopy = NG_RXCOPY_DEFAULT;
     while ((ti = ng_nexttag(&tstate)) != NULL) {
       if (ti->ti_Tag == NGCT_IPRequests)         ipreq = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_WriteRequests) wreq  = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_TcpSendspace)  sndsp = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_TcpRecvspace)  rcvsp = (long)ti->ti_Data;
       else if (ti->ti_Tag == NGCT_SANA2RxDMA)    rxdma = (long)ti->ti_Data;
+      else if (ti->ti_Tag == NGCT_SANA2RxCopy)   rxcopy = (long)ti->ti_Data;
     }
     /*
      * Honour an explicit tcp.sendspace= / tcp.recvspace= from the interface config by
@@ -769,7 +775,7 @@ LONG SAVEDS RAF5(_AddInterfaceTagList,
   }
   {
     struct ifnet *newif = sana_add_interface((char *)interface_name, (char *)device_name,
-					     (long)unit, ipreq, wreq, rxdma);
+					     (long)unit, ipreq, wreq, rxdma, rxcopy);
     if (newif == NULL) {
       ReleaseSyscallSemaphore(libPtr);
       writeErrnoValue(libPtr, ENXIO);		/* could not open the device */
@@ -1126,6 +1132,7 @@ VOID SAVEDS RAF2(_ReleaseInterfaceList,
 #define IFQ_GetBytesOut			(IFQ_BASE + 29)
 #define IFQ_GetSANA2CopyStats		(IFQ_BASE + 31)
 #define IFQ_SANA2RxDMAMode		(IFQ_BASE + 43)
+#define IFQ_SANA2RxCopyStats		(IFQ_BASE + 44)
 
 /* SANA-II buffer-management copy-function call counters (mirrors the SDK's
  * struct SANA2CopyStats). */
@@ -1135,6 +1142,11 @@ struct SANA2CopyStats {
 	ULONG	s2cs_ByteIn;
 	ULONG	s2cs_ByteOut;
 	ULONG	s2cs_WordOut;
+};
+struct SANA2RxCopyStats {
+	ULONG contiguous_packets, contiguous_bytes;
+	ULONG split_packets, split_bytes;
+	ULONG fallbacks, retained_headers;
 };
 #define IFQ_NumReadRequestsPending	(IFQ_BASE + 32)
 #define IFQ_NumWriteRequestsPending	(IFQ_BASE + 33)
@@ -1295,6 +1307,17 @@ LONG SAVEDS RAF3(_QueryInterfaceTagList,
       break;
     case IFQ_SANA2RxDMAMode:
       *(ULONG *)d = ssc ? (ULONG)ssc->ss_rxdma_mode : 0;
+      break;
+    case IFQ_SANA2RxCopyStats:
+      {
+	struct SANA2RxCopyStats *rc = (struct SANA2RxCopyStats *)d;
+	rc->contiguous_packets = ssc ? ssc->ss_rxcontig_packets : 0;
+	rc->contiguous_bytes = ssc ? ssc->ss_rxcontig_bytes : 0;
+	rc->split_packets = ssc ? ssc->ss_rxsplit_packets : 0;
+	rc->split_bytes = ssc ? ssc->ss_rxsplit_bytes : 0;
+	rc->fallbacks = ssc ? ssc->ss_rxcontig_fallbacks : 0;
+	rc->retained_headers = ssc ? ssc->ss_rxcontig_retained : 0;
+      }
       break;
     /* Counters this stack does not track. Answer 0 (a plausible figure) rather than
      * leaving the caller's buffer untouched -- an unwritten buffer reads back as

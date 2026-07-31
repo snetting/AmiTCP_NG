@@ -217,10 +217,12 @@ static void show_interfaces(void)
 static int show_interface_info(const char *name)
 {
   struct ng_sin sin, mask; LONG mtu = 0, hwt = 0, state = 0, unit = 0, dma_mode = 0;
-  ULONG rx = 0, tx = 0; struct SANA2CopyStats cs;
-  struct TagItem tg[12]; char ip[24], hb[24]; char *dev = 0;   /* IFQ_DeviceName -> STRPTR */
+  ULONG rx = 0, tx = 0; struct SANA2CopyStats cs; struct SANA2RxCopyStats rc;
+  struct TagItem tg[13]; char ip[24], hb[24]; char *dev = 0;   /* IFQ_DeviceName -> STRPTR */
   cs.s2cs_DMAIn = cs.s2cs_DMAOut = cs.s2cs_ByteIn = 0;
   cs.s2cs_ByteOut = cs.s2cs_WordOut = 0;
+  rc.contiguous_packets = rc.contiguous_bytes = 0;
+  rc.split_packets = rc.split_bytes = rc.fallbacks = rc.retained_headers = 0;
   sin.sin_addr = 0; mask.sin_addr = 0;
   tg[0].ti_Tag = IFQ_DeviceName_;     tg[0].ti_Data = (ULONG)&dev;
   tg[1].ti_Tag = IFQ_DeviceUnit_;     tg[1].ti_Data = (ULONG)&unit;
@@ -233,7 +235,8 @@ static int show_interface_info(const char *name)
   tg[8].ti_Tag = IFQ_State;           tg[8].ti_Data = (ULONG)&state;
   tg[9].ti_Tag = IFQ_GetSANA2CopyStats; tg[9].ti_Data = (ULONG)&cs;
   tg[10].ti_Tag = IFQ_SANA2RxDMAMode; tg[10].ti_Data = (ULONG)&dma_mode;
-  tg[11].ti_Tag = TAG_END;             tg[11].ti_Data = 0;
+  tg[11].ti_Tag = IFQ_SANA2RxCopyStats; tg[11].ti_Data = (ULONG)&rc;
+  tg[12].ti_Tag = TAG_END;             tg[12].ti_Data = 0;
   if (ng_queryif((void *)name, tg) != 0) return 0;
 
   Printf((STRPTR)"Interface \"%s\"\n", (LONG)name);
@@ -250,6 +253,12 @@ static int show_interface_info(const char *name)
          (LONG)(dma_mode == 1 ? "off" : dma_mode == 2 ? "auto" : "unknown"));
   Printf((STRPTR)"SANA-II RX DMA transfers     = %ld\n", (LONG)cs.s2cs_DMAIn);
   Printf((STRPTR)"SANA-II RX byte copies       = %ld\n", (LONG)cs.s2cs_ByteIn);
+  Printf((STRPTR)"SANA-II contiguous RX packets = %ld (%ld bytes)\n",
+         (LONG)rc.contiguous_packets, (LONG)rc.contiguous_bytes);
+  Printf((STRPTR)"SANA-II split RX packets       = %ld (%ld bytes)\n",
+         (LONG)rc.split_packets, (LONG)rc.split_bytes);
+  Printf((STRPTR)"SANA-II contiguous fallbacks  = %ld\n", (LONG)rc.fallbacks);
+  Printf((STRPTR)"SANA-II retained RX headers   = %ld\n", (LONG)rc.retained_headers);
   Printf((STRPTR)"Link status                  = %s\n", (LONG)((state == NG_SM_Up) ? "Up" : "Down"));
   return 1;
 }

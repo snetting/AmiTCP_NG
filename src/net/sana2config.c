@@ -103,6 +103,7 @@ ssconfig_parse(struct CSource argfile[])
    */
   if (config != NULL) {
     config->rxdma = SS_RXDMA_DEFAULT;
+    config->rxcopy = SS_RXCOPY_DEFAULT;
     rdargs = config->rdargs;
     rdargs->RDA_Source = *argfile;
     rdargs->RDA_DAList = NULL;
@@ -123,6 +124,11 @@ ssconfig_parse(struct CSource argfile[])
           config->rxdma = SS_RXDMA_OFF;
         else
           config->rxdma = SS_RXDMA_AUTO;
+      }
+      if (config->args->a_rxcopy != NULL) {
+        UBYTE *v = config->args->a_rxcopy;
+        config->rxcopy = (v[0] == 'c' || v[0] == 'C')
+                       ? SS_RXCOPY_CONTIGUOUS : SS_RXCOPY_SPLIT;
       }
       config->flags |= SSCF_RDARGS;
       return config;

@@ -420,6 +420,40 @@ static SAVEDS BOOL RAF3(m_copy_to_mbuf,
   to->ioip_rx_state = IOIP_RX_COPIED;
   to->ioip_if->ss_copyin++;		/* SANA2CopyStats: byte CopyToBuff (RX) */
 
+  /* Ordinary packets can live in one cluster. Keep the small header mbuf at
+   * the head of the free chain for the next receive request. */
+  if (to->ioip_if->ss_rxcopy_mode == SS_RXCOPY_CONTIGUOUS &&
+      n > (ULONG)MHLEN && m != NULL && (m->m_flags & M_PKTHDR) &&
+      m->m_next != NULL && (m->m_next->m_flags & M_EXT) &&
+      n <= (ULONG)m->m_next->m_ext.ext_size) {
+    struct mbuf *header = m;
+    struct mbuf *cluster = m->m_next;
+    struct mbuf *tail = cluster->m_next;
+
+    bcopy(from, mtod(cluster, caddr_t), n);
+    cluster->m_pkthdr = header->m_pkthdr;
+    cluster->m_flags = (cluster->m_flags & M_EXT) |
+                       (header->m_flags & M_COPYFLAGS);
+    cluster->m_len = n;
+    cluster->m_next = NULL;
+    cluster->m_pkthdr.len = n;
+
+    header->m_flags &= ~M_PKTHDR;
+    header->m_data = header->m_pktdat;
+    header->m_len = MHLEN;
+    header->m_next = tail;
+
+    to->ioip_packet = cluster;
+    to->ioip_reserved = header;
+    to->ioip_if->ss_rxcontig_packets++;
+    to->ioip_if->ss_rxcontig_bytes += n;
+    to->ioip_if->ss_rxcontig_retained++;
+    return TRUE;
+  }
+
+  if (to->ioip_if->ss_rxcopy_mode == SS_RXCOPY_CONTIGUOUS)
+    to->ioip_if->ss_rxcontig_fallbacks++;
+
 #if DIAGNOSTIC
   if (!(m->m_flags & M_PKTHDR)) {
     log(LOG_ERR, "m_copy_to_buff: mbuf chain has no header");
@@ -465,6 +499,8 @@ static SAVEDS BOOL RAF3(m_copy_to_mbuf,
   to->ioip_packet = to->ioip_reserved;
   to->ioip_packet->m_pkthdr.len = totlen; /* set packet length */
   to->ioip_reserved = f;		/* leftover mbufs */
+  to->ioip_if->ss_rxsplit_packets++;
+  to->ioip_if->ss_rxsplit_bytes += totlen;
 
   /*
    * More mbuf flags and interface pointer must be set later

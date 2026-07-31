@@ -72,6 +72,10 @@
 /* A prefix added to the SANA-II device name if needed */
 #define NAME_PREFIX "networks/"
 
+#define SS_RXCOPY_DEFAULT     0
+#define SS_RXCOPY_SPLIT       1
+#define SS_RXCOPY_CONTIGUOUS  2
+
 /*
  * Our Special SANA-II request
  */
@@ -125,6 +129,13 @@ struct sana_softc {
   ULONG           ss_copyout;	      /* SANA2 byte CopyFromBuff (TX) call count  */
   ULONG           ss_dmain;           /* SANA2 DMA CopyToBuff (RX) completion count */
   UBYTE           ss_rxdma_mode;      /* SS_RXDMA_* effective mode */
+  UBYTE           ss_rxcopy_mode;     /* SS_RXCOPY_* receive-copy mode */
+  ULONG           ss_rxcontig_packets;
+  ULONG           ss_rxcontig_bytes;
+  ULONG           ss_rxsplit_packets;
+  ULONG           ss_rxsplit_bytes;
+  ULONG           ss_rxcontig_fallbacks;
+  ULONG           ss_rxcontig_retained;
   UWORD		  ss_reqno;	      /* # of requests to allocate */
   UWORD           ss_cflags;	      /* configuration flags */
   UBYTE           ss_offcleanup;      /* set when the driver went offline: sana_poll()

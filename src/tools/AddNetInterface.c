@@ -35,6 +35,7 @@
  *   domain=<name>             default domain name
  *   requiresinitdelay=yes|no  pause after opening the device before configuring it
  *   sana2.rx_dma=auto|off     advertise the optional SANA-II RX DMA callback
+ *   sana2.rx_copy=split|contiguous  select the receive mbuf copy layout
  *
  * Build: m68k-amigaos-gcc -noixemul -O2 -m68000 src/tools/AddNetInterface.c -o AddNetInterface
  */
@@ -63,9 +64,13 @@ struct Library *SocketBase;
 #define NGCT_TcpSendspace       (TU + 0x004E4703UL)
 #define NGCT_TcpRecvspace       (TU + 0x004E4704UL)
 #define NGCT_SANA2RxDMA         (TU + 0x004E4705UL)
+#define NGCT_SANA2RxCopy        (TU + 0x004E4706UL)
 #define NG_RXDMA_DEFAULT        0
 #define NG_RXDMA_OFF            1
 #define NG_RXDMA_AUTO           2
+#define NG_RXCOPY_DEFAULT       0
+#define NG_RXCOPY_SPLIT         1
+#define NG_RXCOPY_CONTIGUOUS    2
 #define SM_Up                   3
 #define RTA_DefaultGateway      (TU + 1603)
 #define CAAMTA_RouterTableSize  (TU + 2006)
@@ -179,6 +184,7 @@ struct ifcfg {
   long sendspace;            /* tcp.sendspace= (0 = use the stack's RAM-tiered default) */
   long recvspace;            /* tcp.recvspace= (0 = use the stack's RAM-tiered default) */
   long rxdma;                /* sana2.rx_dma= (auto or off) */
+  long rxcopy;               /* sana2.rx_copy= (split or contiguous) */
 };
 
 /* Parse a non-negative decimal from val, stopping at the first non-digit. */
@@ -220,6 +226,7 @@ static void parse_line(char *line, struct ifcfg *cfg)
   else if (ci_eq(kw, "nameserver")){ if (cfg->nns < MAXNS) s_copy(cfg->ns[cfg->nns++], val, VALLEN); }
   else if (ci_eq(kw, "requiresinitdelay")) cfg->initdelay = ci_eq(val, "yes");
   else if (ci_eq(kw, "sana2.rx_dma")) cfg->rxdma = ci_eq(val, "off") ? NG_RXDMA_OFF : NG_RXDMA_AUTO;
+  else if (ci_eq(kw, "sana2.rx_copy")) cfg->rxcopy = ci_eq(val, "contiguous") ? NG_RXCOPY_CONTIGUOUS : NG_RXCOPY_SPLIT;
   /* Clamp to 65535: the stack stores these in a UWORD ring field, so an oversized
    * value would otherwise silently wrap (e.g. 100000 -> 34464) with no diagnostic. */
   else if (ci_eq(kw, "iprequests"))    { cfg->ipreq = 0; for (n=0; val[n] >= '0' && val[n] <= '9'; n++) cfg->ipreq = cfg->ipreq*10 + (val[n]-'0'); if (cfg->ipreq > 65535) cfg->ipreq = 65535; }
@@ -244,6 +251,7 @@ static int read_cfg(const char *path, struct ifcfg *cfg)
   cfg->unit = 0; cfg->dhcp = 0; cfg->have_address = 0; cfg->nns = 0; cfg->initdelay = 0;
   cfg->ipreq = 0; cfg->wreq = 0; cfg->mtu = 0; cfg->sendspace = 0; cfg->recvspace = 0;
   cfg->rxdma = NG_RXDMA_AUTO;
+  cfg->rxcopy = NG_RXCOPY_DEFAULT;
   cfg->device[0] = cfg->address[0] = cfg->netmask[0] = cfg->gateway[0] = cfg->domain[0] = '\0';
 
   fh = Open((STRPTR)path, MODE_OLDFILE);
@@ -317,6 +325,7 @@ static long bring_up(const char *ifname, struct ifcfg *cfg, int quiet, long time
   if (cfg->recvspace > 0) { ct[nc].ti_Tag = NGCT_TcpRecvspace; ct[nc].ti_Data = (ULONG)cfg->recvspace; nc++; }
   if (cfg->mtu       > 0) { ct[nc].ti_Tag = IFC_MTU;           ct[nc].ti_Data = (ULONG)cfg->mtu;       nc++; }
   ct[nc].ti_Tag = NGCT_SANA2RxDMA; ct[nc].ti_Data = (ULONG)cfg->rxdma; nc++;
+  ct[nc].ti_Tag = NGCT_SANA2RxCopy; ct[nc].ti_Data = (ULONG)cfg->rxcopy; nc++;
 
   if (cfg->dhcp) {
     /* --- DHCP: add the interface unaddressed, then let the stack lease one. --- */

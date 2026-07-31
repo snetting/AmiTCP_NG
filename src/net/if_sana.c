@@ -620,6 +620,8 @@ iface_make(struct ssconfig *ifc)
 	    ssconfig(ssc, ifc);
 	    ssc->ss_rxdma_mode =
 	      (ifc->rxdma == SS_RXDMA_OFF) ? SS_RXDMA_OFF : SS_RXDMA_AUTO;
+	    ssc->ss_rxcopy_mode =
+	      (ifc->rxcopy == SS_RXCOPY_CONTIGUOUS) ? SS_RXCOPY_CONTIGUOUS : SS_RXCOPY_SPLIT;
 	    
 	    NewList((struct List*)&ssc->ss_freereq);
 
@@ -657,7 +659,7 @@ iface_make(struct ssconfig *ifc)
  */
 struct ifnet *
 sana_add_interface(char *ifname, char *devname, long devunit,
-		   long ipreq, long wreq, long rxdma)
+		   long ipreq, long wreq, long rxdma, long rxcopy)
 {
   struct ssconfig ssc;
   LONG unit_val = devunit;
@@ -676,6 +678,7 @@ sana_add_interface(char *ifname, char *devname, long devunit,
 
   ssc.flags = 0;			/* no ReadArgs RDArgs to free */
   ssc.rxdma = rxdma;
+  ssc.rxcopy = rxcopy;
   ssc.args->a_name = (UBYTE *)ssc.name;
   ssc.args->a_dev  = (UBYTE *)devname;
   ssc.args->a_unit = &unit_val;

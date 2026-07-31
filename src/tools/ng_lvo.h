@@ -58,6 +58,7 @@ extern struct Library *SocketBase;
 #define IFQ_State		(IFQ_BASE + 19)
 #define IFQ_GetSANA2CopyStats	(IFQ_BASE + 31)
 #define IFQ_SANA2RxDMAMode	(IFQ_BASE + 43)
+#define IFQ_SANA2RxCopyStats	(IFQ_BASE + 44)
 
 struct SANA2CopyStats {
   ULONG s2cs_DMAIn;
@@ -65,6 +66,11 @@ struct SANA2CopyStats {
   ULONG s2cs_ByteIn;
   ULONG s2cs_ByteOut;
   ULONG s2cs_WordOut;
+};
+struct SANA2RxCopyStats {
+  ULONG contiguous_packets, contiguous_bytes;
+  ULONG split_packets, split_bytes;
+  ULONG fallbacks, retained_headers;
 };
 
 /* ---- vector wrappers ------------------------------------------------------- */

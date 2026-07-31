@@ -1,6 +1,6 @@
 /* rxbench -- raw TCP receive-throughput benchmark for AmiTCP_NG.
  *
- * Connects to the transfer host's throughput SOURCE (172.20.0.10:9000, which
+ * Connects to the SLIRP host gateway's throughput SOURCE (10.0.2.2:9000, which
  * streams zeros), reads as fast as it can for a fixed wall-clock window, and
  * reports KB/s. This measures the bsdsocket RX path itself -- no SMB/FTP protocol
  * overhead -- i.e. exactly what issue #1 (slow downloads) is about. Logs
@@ -18,6 +18,7 @@ struct Library *SocketBase;
 #define IFQ_BASE                    (NG_TU + 1900)
 #define IFQ_GetSANA2CopyStats       (IFQ_BASE + 31)
 #define IFQ_SANA2RxDMAMode          (IFQ_BASE + 43)
+#define IFQ_SANA2RxCopyStats        (IFQ_BASE + 44)
 
 struct SANA2CopyStats {
   ULONG s2cs_DMAIn;
@@ -25,6 +26,11 @@ struct SANA2CopyStats {
   ULONG s2cs_ByteIn;
   ULONG s2cs_ByteOut;
   ULONG s2cs_WordOut;
+};
+struct SANA2RxCopyStats {
+  ULONG contiguous_packets, contiguous_bytes;
+  ULONG split_packets, split_bytes;
+  ULONG fallbacks, retained_headers;
 };
 
 struct sockaddr_in {
@@ -60,20 +66,26 @@ static void lognum(BPTR f,long v){char b[12];int i=11;unsigned long u=v<0?-(unsi
 static unsigned long now_ticks(void){ struct DateStamp ds; DateStamp(&ds);
   return (unsigned long)ds.ds_Minute*3000UL + (unsigned long)ds.ds_Tick; }
 
-static void query_copy_stats(ULONG *dma, ULONG *byte, ULONG *mode)
+static void query_copy_stats(ULONG *dma, ULONG *byte, ULONG *mode,
+                             struct SANA2RxCopyStats *rx)
 {
   struct SANA2CopyStats cs;
-  struct TagItem tags[3];
+  struct TagItem tags[4];
   LONG mode_value = 0;
 
   cs.s2cs_DMAIn = cs.s2cs_DMAOut = cs.s2cs_ByteIn = 0;
   cs.s2cs_ByteOut = cs.s2cs_WordOut = 0;
+  rx->contiguous_packets = rx->contiguous_bytes = 0;
+  rx->split_packets = rx->split_bytes = rx->fallbacks = rx->retained_headers = 0;
   tags[0].ti_Tag = IFQ_GetSANA2CopyStats; tags[0].ti_Data = (ULONG)&cs;
   tags[1].ti_Tag = IFQ_SANA2RxDMAMode;    tags[1].ti_Data = (ULONG)&mode_value;
-  tags[2].ti_Tag = TAG_END;               tags[2].ti_Data = 0;
+  tags[2].ti_Tag = IFQ_SANA2RxCopyStats;  tags[2].ti_Data = (ULONG)rx;
+  tags[3].ti_Tag = TAG_END;               tags[3].ti_Data = 0;
   if (v_query((void *)"bench", tags) != 0) {
     cs.s2cs_DMAIn = cs.s2cs_ByteIn = 0;
     mode_value = 0;
+    rx->contiguous_packets = rx->contiguous_bytes = 0;
+    rx->split_packets = rx->split_bytes = rx->fallbacks = rx->retained_headers = 0;
   }
   *dma = cs.s2cs_DMAIn;
   *byte = cs.s2cs_ByteIn;
@@ -86,6 +98,7 @@ int main(void){
   long s, n, secs = 15;
   unsigned long total = 0, t0, tnow, elapsed, kbps;
   ULONG dma0, byte0, dma1, byte1, mode1;
+  struct SANA2RxCopyStats rx0, rx1;
   BPTR f = Open((STRPTR)"SYS:rxbench.log", MODE_NEWFILE);
 
   SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
@@ -95,14 +108,14 @@ int main(void){
   if (s < 0){ logs(f,"socket() failed errno="); lognum(f,v_errno()); logs(f,"\n"); goto out; }
 
   sa.sin_len=sizeof(sa); sa.sin_family=2; sa.sin_port=9000;
-  sa.sin_addr=0xAC14000AUL;                   /* 172.20.0.10 */
+  sa.sin_addr=0x0A000202UL;                   /* 10.0.2.2 (SLIRP host) */
   { int i; for(i=0;i<8;i++) sa.sin_zero[i]=0; }
 
-  logs(f,"connecting to 172.20.0.10:9000 (throughput source) ...\n");
+  logs(f,"connecting to 10.0.2.2:9000 (throughput source) ...\n");
   if (v_connect(s,&sa,sizeof(sa)) < 0){ logs(f,"connect() failed errno="); lognum(f,v_errno()); logs(f,"\n"); v_close(s); goto out; }
   logs(f,"connected -- receiving for "); lognum(f,secs); logs(f," s ...\n");
 
-  query_copy_stats(&dma0, &byte0, &mode1);
+  query_copy_stats(&dma0, &byte0, &mode1, &rx0);
 
   t0 = now_ticks();
   for (;;) {
@@ -117,13 +130,19 @@ int main(void){
   if (elapsed == 0) elapsed = 1;
   /* KB/s = (total/1024) / (elapsed/50) = total*50 / (1024*elapsed); do the /1024 first to avoid overflow */
   kbps = (total / 1024UL) * 50UL / elapsed;
-  query_copy_stats(&dma1, &byte1, &mode1);
+  query_copy_stats(&dma1, &byte1, &mode1, &rx1);
 
   logs(f,"RESULT: received "); lognum(f,(long)total); logs(f," bytes in ");
   lognum(f,(long)elapsed); logs(f," ticks (1/50s) = ");
   lognum(f,(long)kbps); logs(f," KB/s mode="); lognum(f,(long)mode1);
   logs(f," dma_in="); lognum(f,(long)(dma1 - dma0));
   logs(f," byte_in="); lognum(f,(long)(byte1 - byte0)); logs(f,"\n");
+  logs(f," contig_packets="); lognum(f,(long)(rx1.contiguous_packets-rx0.contiguous_packets));
+  logs(f," contig_bytes="); lognum(f,(long)(rx1.contiguous_bytes-rx0.contiguous_bytes));
+  logs(f," split_packets="); lognum(f,(long)(rx1.split_packets-rx0.split_packets));
+  logs(f," split_bytes="); lognum(f,(long)(rx1.split_bytes-rx0.split_bytes));
+  logs(f," fallbacks="); lognum(f,(long)(rx1.fallbacks-rx0.fallbacks));
+  logs(f," retained="); lognum(f,(long)(rx1.retained_headers-rx0.retained_headers)); logs(f,"\n");
   v_close(s);
 
 out:

@@ -17,11 +17,17 @@ G="$ROOT/emu/hdd/System/Workbench3.2"
 CPU="${CPU:-68000}"
 TIMEOUT="${TIMEOUT:-170}"
 RXDMA="${RXDMA:-auto}"
+RXCOPY="${RXCOPY:-split}"
+CHIPMEM="${CHIPMEM:-2}"
+FASTMEM="${FASTMEM:-8}"
+SPEED="${SPEED:-}"
 
 # CPU flags: 68000 = the plain model; anything else = unthrottled + JIT.
 CPUARGS=()
 if [ "$CPU" != "68000" ]; then
   CPUARGS=(-s cpu_model="$CPU" -s cpu_speed=max -s cpu_compatible=false -s cachesize=8192)
+elif [ "$SPEED" = "max" ]; then
+  CPUARGS=(-s cpu_speed=max)
 fi
 
 # 1. stage the current library (unless told not to) + (re)build the bench client
@@ -39,10 +45,14 @@ VER="$(strings "$G/Libs/bsdsocket.library" | grep -m1 'VER: bsdsocket' | sed 's/
 # 1b. write our OWN interface + startup so the run never depends on leftover guest
 #     state (the guest HD is a shared scratch area).
 cat > "$G/Devs/NetInterfaces/bench" <<'IFACE'
-device=a2065.device
-configure=dhcp
+device=DEVS:Networks/a2065.device
+address=10.0.2.15
+netmask=255.255.255.0
+gateway=10.0.2.2
+requiresinitdelay=no
 IFACE
 printf 'sana2.rx_dma=%s\n' "$RXDMA" >> "$G/Devs/NetInterfaces/bench"
+printf 'sana2.rx_copy=%s\n' "$RXCOPY" >> "$G/Devs/NetInterfaces/bench"
 cat > "$G/S/Startup-sequence" <<'BOOT'
 C:SetPatch QUIET
 MakeDir RAM:T >NIL:
@@ -62,7 +72,7 @@ docker network inspect amitcp-net >/dev/null 2>&1 || \
   docker network create --subnet 172.20.0.0/24 --gateway 172.20.0.1 amitcp-net >/dev/null
 if ! docker ps --format '{{.Names}}' | grep -q '^transferhost$'; then
   docker rm -f transferhost >/dev/null 2>&1 || true
-  docker run -d --rm --name transferhost --network amitcp-net --ip 172.20.0.10 \
+  docker run -d --rm --name transferhost --network amitcp-net --ip 172.20.0.10 -p 9000:9000 \
     -v amitcp-ng-share:/srv/share -e TESTFILE_SIZES="5 50" amitcp-ng-transferhost >/dev/null
   sleep 5
 fi
@@ -70,7 +80,7 @@ fi
 # 3. run the guest
 rm -f "$G/bench.log" "$G/rxbench.log"
 docker rm -f amiberry-net >/dev/null 2>&1 || true
-docker run --rm --name amiberry-net --network amitcp-net \
+docker run --rm --name amiberry-net --network host \
   -v "$ROOT":/work -w /work amitcp-ng-amiberry:latest bash -c "
   Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 &
   export DISPLAY=:99 SDL_AUDIODRIVER=dummy LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe HOME=/tmp/abhome
@@ -78,6 +88,7 @@ docker run --rm --name amiberry-net --network amitcp-net \
   cd /opt/amiberry
   timeout $((TIMEOUT-20)) ./build/amiberry --model A600 -r /work/emu/rom/kickCDTVa1000a500a2000a600.rom \
      -s filesystem2=rw,DH0:System:/work/emu/hdd/System/Workbench3.2,0 \
+     -s chipmem_size=$CHIPMEM -s fastmem_size=$FASTMEM \
      ${CPUARGS[*]} -s a2065=slirp -G >/dev/null 2>&1" >/dev/null 2>&1 &
 ABPID=$!
 # 4. wait for the result

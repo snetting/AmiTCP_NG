@@ -35,7 +35,8 @@
   "NOARP/S," \
   "ARPHDR/N/K," \
   "P2P=POINT2POINT/S,NOSIMPLEX/S,LOOPBACK/S," \
-  "RXDMA/K"
+  "RXDMA/K," \
+  "RXCOPY/K"
 
 #define SS_RXDMA_DEFAULT 0
 #define SS_RXDMA_OFF     1
@@ -57,6 +58,7 @@ struct ssc_args {
   LONG   a_nosimplex;
   LONG   a_loopback;
   UBYTE *a_rxdma;
+  UBYTE *a_rxcopy;
 };
 
 struct ssconfig {
@@ -66,6 +68,7 @@ struct ssconfig {
   struct RDArgs   rdargs[1];
   struct ssc_args args[1];
   LONG            rxdma;
+  LONG            rxcopy;
 };
 
 #define SSCF_RDARGS 1		/* set iff rdargs should be freed */
