@@ -118,6 +118,83 @@ it brings the whole TCP/IP stack up by itself the first time any program opens i
   monitor hooks, server API) — see
   [docs/DEFERRED-VECTORS.md](docs/DEFERRED-VECTORS.md).
 
+## Experimental performance branches
+
+The following branches contain experimental receive-path optimisations. They are
+kept separate from `main` so that they can be tested and reviewed without
+implying that they are ready for general release. **Neither branch has been
+tested on real Amiga hardware, and no pull request has been opened against the
+main project.**
+
+### `perf-sana2-rx-dma32-ab`
+
+[View branch on GitHub](https://github.com/MW0MWZ/AmiTCP_NG/tree/perf-sana2-rx-dma32-ab)
+
+This branch adds an optional SANA-II `S2_DMACopyToBuff32` receive path and an
+A/B harness comparing it with the legacy callback path. DMA is advertised only
+when requested and the stack falls back to `S2_CopyToBuff` when the driver
+cannot provide a suitable aligned contiguous buffer.
+
+The reasoning was that a driver which can DMA directly into an mbuf cluster
+could remove the driver-to-stack copy. The SANA-II specification makes this
+callback optional, however, so it is not a generally available optimisation.
+
+Testing with Amiberry's emulated A2065 over SLIRP produced no measurable
+throughput improvement. Representative median results were:
+
+| CPU/configuration | DMA off | DMA auto | Change |
+|---|---:|---:|---:|
+| 68000, 2 MiB chip + 8 MiB fast | 80 KB/s | 80 KB/s | 0.0% |
+| 68020, 2 MiB chip + 8 MiB fast | 242.5 KB/s | 243 KB/s | +0.2% |
+| 68040, 2 MiB chip + 8 MiB fast | 421.5 KB/s | 418.5 KB/s | −0.7% |
+| 68060, 2 MiB chip + 8 MiB fast | 412 KB/s | 418.5 KB/s | +1.6% |
+
+The benchmark reported `dma_in=0` in every run. Therefore the DMA receive
+implementation was built and exercised only through its fallback behaviour;
+it was not validated with a real DMA-capable SANA-II driver.
+
+### `perf-sana2-rx-contiguous`
+
+[View branch on GitHub](https://github.com/MW0MWZ/AmiTCP_NG/tree/perf-sana2-rx-contiguous)
+
+This branch adds an independent `sana2.rx_copy=contiguous` mode. For ordinary
+packets larger than `MHLEN` and fitting in one cluster, the stack performs one
+copy directly into the cluster and delivers one mbuf. The small header mbuf is
+retained for reuse. Small, oversized, or otherwise unsuitable packets use the
+existing split-chain path. The default remains `sana2.rx_copy=split`.
+
+This was selected as the next optimisation because it works with ordinary
+DMA-less SANA-II drivers, reduces mbuf-chain handling, and avoids crossing an
+mbuf boundary during later protocol and socket-buffer processing. It does not
+reduce the number of packet bytes copied, so only a modest gain was expected.
+
+Runtime A/B tests used the same Amiberry A2065/SLIRP environment and workload:
+
+| CPU/configuration | Split | Contiguous | Change |
+|---|---:|---:|---:|
+| 68000, 2 MiB chip + 8 MiB fast, two runs | 83 KB/s | 82 KB/s | −1.2% |
+| 68040, 2 MiB chip + 8 MiB fast | 417 KB/s | 421 KB/s | +1.0% |
+| 68000, max speed, 1 MiB chip + 4 MiB fast | 92 KB/s | 91 KB/s | −1.1% |
+
+The contiguous counters confirmed that the new path was active, but the
+results were within emulator and workload variation. These tests therefore do
+not establish a real-world throughput gain. CPU utilisation was not measured.
+
+### Test limitations and next step
+
+The tests run a Podman-built Amiberry image with a licensed Kickstart ROM,
+AmigaOS filesystem, emulated A2065 networking, and SLIRP networking. They do
+not reproduce Zorro bus timing, real driver DMA, cache behaviour, or physical
+network-card interrupt behaviour. No real A2065, PiStorm, GENET, or other
+Amiga network hardware has been used to validate either branch.
+
+The current view is to retain both branches for targeted testing. If the
+contiguous path shows a meaningful CPU reduction on real hardware but little
+throughput gain, the next candidate is a benchmark-only prototype that fuses
+the receive copy and IP/TCP checksum pass. That is more invasive and should be
+integrated only if the standalone copy-and-checksum benchmark demonstrates a
+clear benefit.
+
 ## Installing
 
 Grab the release `.lha` (or the `.adf` floppy image) and run its
