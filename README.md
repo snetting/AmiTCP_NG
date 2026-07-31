@@ -139,8 +139,16 @@ The reasoning was that a driver which can DMA directly into an mbuf cluster
 could remove the driver-to-stack copy. The SANA-II specification makes this
 callback optional, however, so it is not a generally available optimisation.
 
-Testing with Amiberry's emulated A2065 over SLIRP produced no measurable
-throughput improvement. Representative median results were:
+The benchmark reported `dma_in=0` in every run. No DMA receive transfer was
+therefore observed. With the current setup we cannot determine whether this is
+because the A2065 SANA-II driver does not implement the optional callback, or
+because Amiberry's emulated A2065/SANA-II implementation does not expose it.
+The DMA implementation consequently remains unvalidated.
+
+The following are therefore **DMA-unavailable control results**, not measured
+DMA performance results. They show that advertising the optional callback had
+no negative throughput impact while the driver continued using the ordinary
+copy path:
 
 | CPU/configuration | DMA off | DMA auto | Change |
 |---|---:|---:|---:|
@@ -148,10 +156,6 @@ throughput improvement. Representative median results were:
 | 68020, 2 MiB chip + 8 MiB fast | 242.5 KB/s | 243 KB/s | +0.2% |
 | 68040, 2 MiB chip + 8 MiB fast | 421.5 KB/s | 418.5 KB/s | −0.7% |
 | 68060, 2 MiB chip + 8 MiB fast | 412 KB/s | 418.5 KB/s | +1.6% |
-
-The benchmark reported `dma_in=0` in every run. Therefore the DMA receive
-implementation was built and exercised only through its fallback behaviour;
-it was not validated with a real DMA-capable SANA-II driver.
 
 ### `perf-sana2-rx-contiguous`
 
